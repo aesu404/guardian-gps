@@ -1,0 +1,142 @@
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        let map, policeMap, userMarker, alertMarker, userPos = null;
+
+        function handleLogin() {
+            const u = document.getElementById('user').value;
+            const p = document.getElementById('pass').value;
+
+            if (u === "admin" && p === "1234") {
+                showUI('user-interface');
+                initUserMap();
+            } else if (u === "police" && p === "9999") {
+                showUI('police-interface');
+                initPoliceMap();
+                startPoliceMonitoring();
+            } else {
+                document.getElementById('err').style.display = 'block';
+            }
+        }
+
+        function showUI(id) {
+            document.getElementById('login-page').classList.add('hidden');
+            document.getElementById(id).classList.remove('hidden');
+        }
+
+        // --- USER INTERFACE LOGIC ---
+        function initUserMap() {
+            map = L.map('map').setView([10.3157, 123.8854], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+            // ACCURACY FIX: Use high accuracy and clear cache
+            const geoOptions = {
+                enableHighAccuracy: true, 
+                timeout: 10000, 
+                maximumAge: 0 
+            };
+
+            navigator.geolocation.watchPosition((pos) => {
+                userPos = [pos.coords.latitude, pos.coords.longitude];
+                const accuracy = pos.coords.accuracy;
+
+                if (!userMarker) {
+                    userMarker = L.circleMarker(userPos, {
+                        radius: 8, color: 'white', fillColor: '#2563eb', fillOpacity: 1, weight: 3
+                    }).addTo(map).bindPopup("Exact Location Locked").openPopup();
+                    map.setView(userPos, 16);
+                } else {
+                    userMarker.setLatLng(userPos);
+                }
+            }, (err) => {
+                console.error(err);
+                alert("GPS Accuracy Error. Please ensure you are outdoors or near a window.");
+            }, geoOptions);
+        }
+
+        async function findPolice() {
+            if (!userPos) return alert("Waiting for high-accuracy GPS lock...");
+            
+            const query = `[out:json];node["amenity"="police"](around:10000,${userPos[0]},${userPos[1]});out;`;
+            const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                data.elements.forEach(p => {
+                    const name = p.tags.name || "Police Station";
+                    L.marker([p.lat, p.lon]).addTo(map)
+                     .bindPopup(`<b>${name}</b><br><button onclick="sendAlert('${name}')" style="background:red;color:white;border:none;padding:5px;cursor:pointer;">SEND PANIC SIGNAL</button>`);
+                });
+            } catch (e) { alert("Network error fetching stations."); }
+        }
+
+        function sendAlert(station) {
+            const payload = {
+                station: station,
+                lat: userPos[0],
+                lon: userPos[1],
+                time: new Date().toLocaleTimeString()
+            };
+            localStorage.setItem('active_emergency', JSON.stringify(payload));
+            alert(`EMERGENCY: Signal sent to ${station} with your exact coordinates.`);
+        }
+
+        // --- POLICE INTERFACE LOGIC ---
+        function initPoliceMap() {
+            // Create a map container dynamically inside the dashboard
+            const mapDiv = document.createElement('div');
+            mapDiv.id = 'police-map';
+            mapDiv.style.height = '300px';
+            mapDiv.style.marginTop = '20px';
+            mapDiv.style.borderRadius = '10px';
+            document.getElementById('police-dashboard').appendChild(mapDiv);
+
+            policeMap = L.map('police-map').setView([10.3157, 123.8854], 12);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(policeMap);
+        }
+
+        function startPoliceMonitoring() {
+            const list = document.getElementById('alert-list');
+            
+            setInterval(() => {
+                const data = localStorage.getItem('active_emergency');
+                if (data) {
+                    const alertObj = JSON.parse(data);
+                    const alertLoc = [alertObj.lat, alertObj.lon];
+
+                    list.innerHTML = `
+                        <div class="alert-card">
+                            <h4 style="margin:0; color:var(--danger)">🚨 DISTRESS SIGNAL DETECTED</h4>
+                            <p><b>From Coordinates:</b> ${alertObj.lat}, ${alertObj.lon}<br>
+                               <b>Targeting:</b> ${alertObj.station}<br>
+                               <b>Time:</b> ${alertObj.time}</p>
+                            <button onclick="resolveAlert()" style="background:var(--success); color:white;">Acknowledge & Clear</button>
+                        </div>
+                    `;
+
+                    // Update Police Map to show where the person is
+                    if (!alertMarker) {
+                        alertMarker = L.marker(alertLoc, {
+                            icon: L.icon({
+                                iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+                                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                                iconSize: [25, 41], iconAnchor: [12, 41]
+                            })
+                        }).addTo(policeMap).bindPopup("CRITICAL: Victim Location").openPopup();
+                    }
+                    policeMap.setView(alertLoc, 16);
+                } else {
+                    list.innerHTML = `<p>Monitoring...</p>`;
+                    if (alertMarker) {
+                        policeMap.removeLayer(alertMarker);
+                        alertMarker = null;
+                    }
+                }
+            }, 3000);
+        }
+
+        function resolveAlert() {
+            localStorage.removeItem('active_emergency');
+            alert("Emergency resolved. Signal cleared from system.");
+        }
+    </script>
